@@ -1,0 +1,6 @@
+{
+  "name": "SmartDine Pro - Hotel Dining & Autonomous Table Management",
+  "description": "High-fidelity hotel dining, kitchen display system (KDS), waiter floor assistance, live order tracking, and zero-payment table ordering.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
