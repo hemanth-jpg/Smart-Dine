@@ -11,9 +11,7 @@ import {
 import { 
   INITIAL_SMART_MENU, 
   INITIAL_SMART_ORDERS, 
-  INITIAL_SERVICE_REQUESTS, 
-  STAFF_ACCOUNTS,
-  DEMO_LOGIN_IDS
+  INITIAL_SERVICE_REQUESTS,
 } from './data/smartDineData';
 import { SmartHeader } from './components/SmartHeader';
 import { TableEntryModal } from './components/TableEntryModal';
@@ -27,6 +25,13 @@ import { KitchenPortal } from './components/portals/KitchenPortal';
 import { WaiterPortal } from './components/portals/WaiterPortal';
 import { AdminPortal } from './components/portals/AdminPortal';
 import { sound } from './utils/audio';
+import {
+  loadMongoData,
+  saveMenu,
+  saveOrders,
+  saveServiceRequests,
+  seedMongoData,
+} from './lib/mongoData';
 
 const STORAGE_KEYS = {
   MENU: 'smartdine_menu',
@@ -54,24 +59,10 @@ export default function App() {
   const [isTableModalOpen, setIsTableModalOpen] = useState(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
 
-  const [staffUser, setStaffUser] = useState<StaffAccount | null>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.STAFF);
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [staffUser, setStaffUser] = useState<StaffAccount | null>(null);
 
   // Track which staff terminals have had an ID authorized in this session
-  const [authorizedPortals, setAuthorizedPortals] = useState<Record<string, StaffAccount>>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.AUTH_PORTALS);
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  });
+  const [authorizedPortals, setAuthorizedPortals] = useState<Record<string, StaffAccount>>({});
 
   // Data collections
   const [menu, setMenu] = useState<SmartMenuItem[]>(() => {
@@ -116,6 +107,31 @@ export default function App() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const liveChannel = useRef<BroadcastChannel | null>(null);
+
+  useEffect(() => {
+    localStorage.removeItem(STORAGE_KEYS.STAFF);
+    localStorage.removeItem(STORAGE_KEYS.AUTH_PORTALS);
+  }, []);
+
+  useEffect(() => {
+    localStorage.removeItem(STORAGE_KEYS.STAFF);
+    localStorage.removeItem(STORAGE_KEYS.AUTH_PORTALS);
+  }, []);
+
+  // Hydrate from MongoDB; localStorage remains the offline fallback.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const remote = await loadMongoData();
+        if (remote?.menu.length) setMenu(remote.menu);
+        if (remote?.orders.length) setOrders(remote.orders);
+        if (remote?.serviceRequests.length) setServiceRequests(remote.serviceRequests);
+        await seedMongoData(menu, orders, serviceRequests);
+      } catch (error) {
+        console.error('MongoDB hydration failed; continuing with local data.', error);
+      }
+    })();
+  }, []);
 
   // Sound Alarm and Toast Helper
   const showToast = (msg: string) => {
@@ -193,18 +209,21 @@ export default function App() {
     setOrders(newOrders);
     localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(newOrders));
     broadcastSync('orders', newOrders);
+    void saveOrders(newOrders).catch((error) => console.error('MongoDB order save failed.', error));
   };
 
   const updateMenuState = (newMenu: SmartMenuItem[]) => {
     setMenu(newMenu);
     localStorage.setItem(STORAGE_KEYS.MENU, JSON.stringify(newMenu));
     broadcastSync('menu', newMenu);
+    void saveMenu(newMenu).catch((error) => console.error('MongoDB menu save failed.', error));
   };
 
   const updateServiceRequestsState = (newReqs: ServiceRequest[]) => {
     setServiceRequests(newReqs);
     localStorage.setItem(STORAGE_KEYS.REQUESTS, JSON.stringify(newReqs));
     broadcastSync('requests', newReqs);
+    void saveServiceRequests(newReqs).catch((error) => console.error('MongoDB request save failed.', error));
   };
 
   const updateCartState = (newCart: OrderItemDetail[]) => {
@@ -233,37 +252,17 @@ export default function App() {
   // Handle successful login via ID Login Gate
   const handleIdLoginSuccess = (account: StaffAccount, targetPortal: AppPortal) => {
     setStaffUser(account);
-    localStorage.setItem(STORAGE_KEYS.STAFF, JSON.stringify(account));
 
     const updated = { ...authorizedPortals, [targetPortal]: account };
     setAuthorizedPortals(updated);
-    localStorage.setItem(STORAGE_KEYS.AUTH_PORTALS, JSON.stringify(updated));
 
     showToast(`Access granted: ${account.name} (${account.id})`);
-  };
-
-  // Handle Staff login from Header dropdown
-  const handleStaffLogin = (account: StaffAccount) => {
-    setStaffUser(account);
-    localStorage.setItem(STORAGE_KEYS.STAFF, JSON.stringify(account));
-    
-    const targetPortal: AppPortal = 
-      account.role === 'kitchen' ? 'kitchen' :
-      account.role === 'waiter' ? 'waiter' : 'admin';
-
-    const updated = { ...authorizedPortals, [targetPortal]: account };
-    setAuthorizedPortals(updated);
-    localStorage.setItem(STORAGE_KEYS.AUTH_PORTALS, JSON.stringify(updated));
-
-    showToast(`Logged in as ${account.name} (${account.id})`);
   };
 
   // Handle logout
   const handleStaffLogout = () => {
     setStaffUser(null);
     setAuthorizedPortals({});
-    localStorage.removeItem(STORAGE_KEYS.STAFF);
-    localStorage.removeItem(STORAGE_KEYS.AUTH_PORTALS);
     showToast('Signed out of terminal. Customer dining active.');
   };
 
@@ -271,7 +270,6 @@ export default function App() {
     const updated = { ...authorizedPortals };
     delete updated[portal];
     setAuthorizedPortals(updated);
-    localStorage.setItem(STORAGE_KEYS.AUTH_PORTALS, JSON.stringify(updated));
     showToast(`Signed out of ${portal} terminal. Enter ID to re-authenticate.`);
   };
 
@@ -440,7 +438,6 @@ export default function App() {
         activeOrdersCount={activeOrdersCount}
         pendingRequestsCount={pendingRequestsCount}
         staffUser={staffUser}
-        onStaffLogin={handleStaffLogin}
         onStaffLogout={handleStaffLogout}
         onOpenTableModal={() => setIsTableModalOpen(true)}
         onOpenQrModal={() => setIsQrModalOpen(true)}
@@ -478,7 +475,7 @@ export default function App() {
           />
         )}
 
-        {/* Page 3: Kitchen Display System (KDS Kanban) (Protected: Chef ID-Only Login Gate) */}
+        {/* Page 3: Kitchen Display System (KDS Kanban) (Staff authentication required) */}
         {activePortal === 'kitchen' && (
           !isPortalAuthenticated('kitchen') ? (
             <IdLoginGate
@@ -497,7 +494,7 @@ export default function App() {
           )
         )}
 
-        {/* Page 4: Waiter Floor Service Hub (Protected: Waiter ID-Only Login Gate) */}
+        {/* Page 4: Waiter Floor Service Hub (Staff authentication required) */}
         {activePortal === 'waiter' && (
           !isPortalAuthenticated('waiter') ? (
             <IdLoginGate
@@ -521,7 +518,7 @@ export default function App() {
           )
         )}
 
-        {/* Page 5: Executive Admin & Sales Analytics (Protected: Admin ID-Only Login Gate) */}
+        {/* Page 5: Executive Admin & Sales Analytics (Staff authentication required) */}
         {activePortal === 'admin' && (
           !isPortalAuthenticated('admin') ? (
             <IdLoginGate

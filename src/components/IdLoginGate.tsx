@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AppPortal, StaffAccount } from '../types/hotel';
-import { DEMO_LOGIN_IDS, STAFF_ACCOUNTS } from '../data/smartDineData';
+import { DEMO_LOGIN_IDS } from '../data/staffAccounts';
+import { loginStaff } from '../lib/mongoData';
 import { sound } from '../utils/audio';
 import { 
   KeyRound, 
@@ -31,8 +32,10 @@ export const IdLoginGate: React.FC<Props> = ({
   onCancelToCustomer,
 }) => {
   const [idInput, setIdInput] = useState('');
+  const [passwordInput, setPasswordInput] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isSuccess, setIsSuccess] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const getPortalMeta = () => {
     switch (targetPortal) {
@@ -43,7 +46,6 @@ export const IdLoginGate: React.FC<Props> = ({
           icon: ChefHat,
           accent: '#f59e0b',
           recommendedPrefix: 'KTN-1001',
-          defaultRole: 'kitchen' as const,
         };
       case 'waiter':
         return {
@@ -52,7 +54,6 @@ export const IdLoginGate: React.FC<Props> = ({
           icon: UserCheck,
           accent: '#38bdf8',
           recommendedPrefix: 'WTR-1001',
-          defaultRole: 'waiter' as const,
         };
       case 'admin':
       default:
@@ -62,7 +63,6 @@ export const IdLoginGate: React.FC<Props> = ({
           icon: BarChart3,
           accent: '#a855f7',
           recommendedPrefix: 'ADM-1001',
-          defaultRole: 'admin' as const,
         };
     }
   };
@@ -70,65 +70,26 @@ export const IdLoginGate: React.FC<Props> = ({
   const meta = getPortalMeta();
   const Icon = meta.icon;
 
-  const handleSubmitId = (enteredId: string) => {
+  const handleSubmitId = async (enteredId: string) => {
     const clean = enteredId.trim().toUpperCase();
-    if (!clean) {
-      setErrorMsg('Please enter a valid Staff or Terminal ID.');
+    if (!clean || !passwordInput) {
+      setErrorMsg('Enter both your staff ID and password.');
       sound.playTick();
       return;
     }
 
-    // Match against known staff accounts
-    let account: StaffAccount | null = null;
-    const knownKeys = Object.keys(STAFF_ACCOUNTS) as Array<'waiter' | 'kitchen' | 'admin' | 'management'>;
-    for (const key of knownKeys) {
-      if (STAFF_ACCOUNTS[key].id.toUpperCase() === clean) {
-        account = STAFF_ACCOUNTS[key];
-        break;
-      }
-    }
-
-    // Match against demo list
-    if (!account) {
-      const demoMatch = DEMO_LOGIN_IDS.find((d) => d.id.toUpperCase() === clean);
-      if (demoMatch) {
-        account = {
-          id: demoMatch.id,
-          name: demoMatch.name,
-          role: demoMatch.role,
-          label: demoMatch.department,
-          avatarColor: meta.accent,
-        };
-      }
-    }
-
-    // If custom ID entered (e.g. KTN-01, CHEF-99, WTR-05, ADM-02, ORD-xxx)
-    if (!account) {
-      let assignedRole: 'waiter' | 'kitchen' | 'admin' | 'management' = meta.defaultRole;
-      if (clean.startsWith('KTN') || clean.startsWith('CHEF') || clean.startsWith('COOK')) {
-        assignedRole = 'kitchen';
-      } else if (clean.startsWith('WTR') || clean.startsWith('WAIT') || clean.startsWith('BUTLER')) {
-        assignedRole = 'waiter';
-      } else if (clean.startsWith('ADM') || clean.startsWith('MGT') || clean.startsWith('GM')) {
-        assignedRole = 'admin';
-      }
-
-      account = {
-        id: clean,
-        name: `Terminal Operator (${clean})`,
-        role: assignedRole,
-        label: `${meta.title} User`,
-        avatarColor: meta.accent,
-      };
-    }
-
-    setIsSuccess(true);
-    sound.playSuccess();
+    setIsSubmitting(true);
     setErrorMsg(null);
-
-    setTimeout(() => {
-      onSuccessLogin(account!, targetPortal);
-    }, 400);
+    try {
+      const account = await loginStaff(clean, passwordInput, targetPortal as 'admin' | 'kitchen' | 'waiter');
+      setIsSuccess(true);
+      sound.playSuccess();
+      setTimeout(() => onSuccessLogin(account, targetPortal), 400);
+    } catch {
+      setErrorMsg('Sign-in failed. Check your ID, password, account setup, and terminal access.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleKeypadPress = (val: string) => {
@@ -174,7 +135,7 @@ export const IdLoginGate: React.FC<Props> = ({
 
           <div className="flex items-center gap-1.5 text-[11px] font-semibold text-stone-400">
             <Lock className="w-3.5 h-3.5 text-[#d4af37]" />
-            <span>ID-Only Terminal Gate</span>
+            <span>Staff Password Required</span>
           </div>
         </div>
 
@@ -200,7 +161,7 @@ export const IdLoginGate: React.FC<Props> = ({
           <div className="p-3 rounded-xl bg-white/5 border border-white/10 text-xs text-stone-300 flex items-center gap-2.5">
             <ShieldCheck className="w-4 h-4 text-[#d4af37] shrink-0" />
             <span>
-              Authentication requires <b>ID only</b> (no password needed). Enter your authorized ID or choose a demo badge below.
+              Sign in with your staff ID and password. The server verifies salted password hashes stored in MongoDB.
             </span>
           </div>
         </div>
@@ -240,10 +201,28 @@ export const IdLoginGate: React.FC<Props> = ({
                 type="submit"
                 className="absolute right-2 top-1/2 -translate-y-1/2 px-4 py-2 rounded-xl bg-[#d4af37] hover:bg-[#e0be4d] active:scale-95 text-stone-950 text-xs font-bold transition-all shadow flex items-center gap-1.5"
               >
-                <span>Authorize</span>
+                <span>{isSubmitting ? 'Checking' : 'Sign in'}</span>
                 <CornerDownLeft className="w-3.5 h-3.5" />
               </button>
             </div>
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="staff-password" className="text-xs font-bold text-stone-300 uppercase tracking-wider flex items-center gap-1.5">
+              <Lock className="w-3.5 h-3.5 text-[#d4af37]" />
+              Password
+            </label>
+            <input
+              id="staff-password"
+              type="password"
+              autoComplete="current-password"
+              value={passwordInput}
+              onChange={(event) => {
+                setErrorMsg(null);
+                setPasswordInput(event.target.value);
+              }}
+              className="w-full px-5 py-3.5 rounded-2xl bg-black/60 border-2 border-white/15 focus:border-[#d4af37] text-white text-base font-mono placeholder:text-stone-600 focus:outline-none transition-colors shadow-inner"
+            />
           </div>
 
           {/* Error / Success Banners */}
@@ -347,9 +326,9 @@ export const IdLoginGate: React.FC<Props> = ({
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-stone-300 uppercase tracking-wider flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 text-[#d4af37]" />
-              Tap Any Official Hotel Demo ID To Sign In:
+              Select a staff ID:
             </span>
-            <span className="text-[10px] text-stone-500">1-Tap Quick Fill</span>
+            <span className="text-[10px] text-stone-500">Password still required</span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
@@ -361,7 +340,6 @@ export const IdLoginGate: React.FC<Props> = ({
                   type="button"
                   onClick={() => {
                     setIdInput(badge.id);
-                    handleSubmitId(badge.id);
                   }}
                   className={`text-left p-3 rounded-2xl border transition-all text-xs flex items-center justify-between group ${
                     isTargetType

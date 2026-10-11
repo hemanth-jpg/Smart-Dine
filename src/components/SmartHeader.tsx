@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AppPortal, StaffAccount } from '../types/hotel';
-import { STAFF_ACCOUNTS, DEMO_LOGIN_IDS } from '../data/smartDineData';
+import { DEMO_LOGIN_IDS } from '../data/staffAccounts';
 import { sound } from '../utils/audio';
 import { 
   ShoppingBag, 
@@ -33,7 +33,6 @@ interface Props {
   activeOrdersCount: number;
   pendingRequestsCount: number;
   staffUser: StaffAccount | null;
-  onStaffLogin: (account: StaffAccount) => void;
   onStaffLogout: () => void;
   onOpenTableModal: () => void;
   onOpenQrModal?: () => void;
@@ -51,7 +50,6 @@ export const SmartHeader: React.FC<Props> = ({
   activeOrdersCount,
   pendingRequestsCount,
   staffUser,
-  onStaffLogin,
   onStaffLogout,
   onOpenTableModal,
   onOpenQrModal,
@@ -255,8 +253,8 @@ export const SmartHeader: React.FC<Props> = ({
                 >
                   <div className="px-3 py-2 border-b border-white/10 mb-1.5">
                     <div className="text-[10px] uppercase font-bold tracking-wider text-[#d4af37] flex items-center justify-between">
-                      <span>Staff ID Authentication</span>
-                      <span className="text-[9px] text-stone-400 font-normal">ID-Only</span>
+                      <span>Staff Authentication</span>
+                      <span className="text-[9px] text-stone-400 font-normal">ID + Password</span>
                     </div>
                     <div className="text-xs text-stone-300 mt-0.5">
                       {staffUser ? (
@@ -265,7 +263,7 @@ export const SmartHeader: React.FC<Props> = ({
                           <span>Active ID: <b>{staffUser.id}</b> ({staffUser.name})</span>
                         </div>
                       ) : (
-                        'Tap any ID below to authenticate instantly:'
+                        'Choose a terminal, then enter your ID and password:'
                       )}
                     </div>
                   </div>
@@ -277,15 +275,7 @@ export const SmartHeader: React.FC<Props> = ({
                         <button
                           key={badge.id}
                           onClick={() => {
-                            sound.playSuccess();
-                            const acc: StaffAccount = {
-                              id: badge.id,
-                              name: badge.name,
-                              role: badge.role,
-                              label: badge.department,
-                              avatarColor: '#d4af37'
-                            };
-                            onStaffLogin(acc);
+                            sound.playTick();
                             setShowStaffMenu(false);
                             onSelectPortal(badge.portal);
                           }}
