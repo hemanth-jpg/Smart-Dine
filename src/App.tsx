@@ -26,10 +26,15 @@ import { WaiterPortal } from './components/portals/WaiterPortal';
 import { AdminPortal } from './components/portals/AdminPortal';
 import { sound } from './utils/audio';
 import {
+  clearStaffAccessToken,
+  createOrder,
+  createServiceRequest,
+  loadMenu,
   loadMongoData,
+  logoutStaff,
   saveMenu,
-  saveOrders,
-  saveServiceRequests,
+  setOrderStatus,
+  setServiceRequestStatus,
   seedMongoData,
 } from './lib/mongoData';
 
@@ -113,25 +118,40 @@ export default function App() {
     localStorage.removeItem(STORAGE_KEYS.AUTH_PORTALS);
   }, []);
 
+  // The public menu is readable without staff credentials; operational records are not.
   useEffect(() => {
-    localStorage.removeItem(STORAGE_KEYS.STAFF);
-    localStorage.removeItem(STORAGE_KEYS.AUTH_PORTALS);
+    void loadMenu()
+      .then(({ menu: remoteMenu }) => setMenu(remoteMenu))
+      .catch((error) => console.error('MongoDB menu hydration failed; continuing with local data.', error));
   }, []);
 
-  // Hydrate from MongoDB; localStorage remains the offline fallback.
+  // Staff terminals poll shared operational data so updates appear across devices.
   useEffect(() => {
-    void (async () => {
+    if (!staffUser) return;
+
+    let active = true;
+    let timeout: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
       try {
         const remote = await loadMongoData();
-        if (remote?.menu.length) setMenu(remote.menu);
-        if (remote?.orders.length) setOrders(remote.orders);
-        if (remote?.serviceRequests.length) setServiceRequests(remote.serviceRequests);
-        await seedMongoData(menu, orders, serviceRequests);
+        if (active) {
+          setMenu(remote.menu);
+          setOrders(remote.orders);
+          setServiceRequests(remote.serviceRequests);
+        }
       } catch (error) {
-        console.error('MongoDB hydration failed; continuing with local data.', error);
+        console.error('Live staff data refresh failed.', error);
+      } finally {
+        if (active) timeout = setTimeout(() => void refresh(), 8000);
       }
-    })();
-  }, []);
+    };
+
+    timeout = setTimeout(() => void refresh(), 8000);
+    return () => {
+      active = false;
+      clearTimeout(timeout);
+    };
+  }, [staffUser?.id]);
 
   // Sound Alarm and Toast Helper
   const showToast = (msg: string) => {
@@ -205,25 +225,11 @@ export default function App() {
     }
   };
 
-  const updateOrdersState = (newOrders: SmartDineOrder[]) => {
-    setOrders(newOrders);
-    localStorage.setItem(STORAGE_KEYS.ORDERS, JSON.stringify(newOrders));
-    broadcastSync('orders', newOrders);
-    void saveOrders(newOrders).catch((error) => console.error('MongoDB order save failed.', error));
-  };
-
-  const updateMenuState = (newMenu: SmartMenuItem[]) => {
+  const updateMenuState = async (newMenu: SmartMenuItem[]) => {
+    await saveMenu(newMenu);
     setMenu(newMenu);
     localStorage.setItem(STORAGE_KEYS.MENU, JSON.stringify(newMenu));
     broadcastSync('menu', newMenu);
-    void saveMenu(newMenu).catch((error) => console.error('MongoDB menu save failed.', error));
-  };
-
-  const updateServiceRequestsState = (newReqs: ServiceRequest[]) => {
-    setServiceRequests(newReqs);
-    localStorage.setItem(STORAGE_KEYS.REQUESTS, JSON.stringify(newReqs));
-    broadcastSync('requests', newReqs);
-    void saveServiceRequests(newReqs).catch((error) => console.error('MongoDB request save failed.', error));
   };
 
   const updateCartState = (newCart: OrderItemDetail[]) => {
@@ -236,40 +242,44 @@ export default function App() {
     // Both Customer Dining and Fitness Nutrition portals are 100% public for hotel guests!
     if (portal === 'customer' || portal === 'fitness') return true;
 
-    // Check specific portal authorized record
     if (authorizedPortals[portal]) return true;
-
-    // Check global staff login
     if (!staffUser) return false;
-
-    if (staffUser.role === 'management' || staffUser.role === 'admin') return true;
-    if (portal === 'kitchen' && staffUser.role === 'kitchen') return true;
-    if (portal === 'waiter' && staffUser.role === 'waiter') return true;
-
-    return false;
+    if (staffUser.role === 'admin' || staffUser.role === 'management') return true;
+    return (portal === 'kitchen' && staffUser.role === 'kitchen') ||
+      (portal === 'waiter' && staffUser.role === 'waiter');
   };
 
   // Handle successful login via ID Login Gate
-  const handleIdLoginSuccess = (account: StaffAccount, targetPortal: AppPortal) => {
-    setStaffUser(account);
-
-    const updated = { ...authorizedPortals, [targetPortal]: account };
-    setAuthorizedPortals(updated);
-
-    showToast(`Access granted: ${account.name} (${account.id})`);
+  const handleIdLoginSuccess = async (account: StaffAccount, targetPortal: AppPortal) => {
+    try {
+      if (account.role === 'admin' || account.role === 'management') {
+        await seedMongoData(menu, orders, serviceRequests);
+      }
+      const remote = await loadMongoData();
+      setMenu(remote.menu);
+      setOrders(remote.orders);
+      setServiceRequests(remote.serviceRequests);
+      setStaffUser(account);
+      setAuthorizedPortals({ [targetPortal]: account });
+      showToast(`Access granted: ${account.name} (${account.id})`);
+    } catch (error) {
+      clearStaffAccessToken();
+      throw error;
+    }
   };
 
   // Handle logout
   const handleStaffLogout = () => {
+    void logoutStaff().catch((error) => console.error('Staff logout failed.', error));
     setStaffUser(null);
     setAuthorizedPortals({});
     showToast('Signed out of terminal. Customer dining active.');
   };
 
   const handleLogoutSingleTerminal = (portal: AppPortal) => {
-    const updated = { ...authorizedPortals };
-    delete updated[portal];
-    setAuthorizedPortals(updated);
+    void logoutStaff().catch((error) => console.error('Staff logout failed.', error));
+    setAuthorizedPortals({});
+    setStaffUser(null);
     showToast(`Signed out of ${portal} terminal. Enter ID to re-authenticate.`);
   };
 
@@ -319,74 +329,87 @@ export default function App() {
   };
 
   // Order Placement (Zero payment - Direct Table/Room Folio)
-  const handlePlaceOrder = (newOrder: SmartDineOrder) => {
-    const updatedOrders = [newOrder, ...orders];
-    updateOrdersState(updatedOrders);
+  const handlePlaceOrder = async (newOrder: SmartDineOrder) => {
+    const confirmedOrder = await createOrder(newOrder);
+    setOrders((current) => [confirmedOrder, ...current]);
     updateCartState([]);
-
-    showToast(`🚨 Order ${newOrder.id} fired straight to the Kitchen! Folio: Table ${newOrder.table}.`);
+    showToast(`Order ${confirmedOrder.id} sent to the kitchen. Table ${confirmedOrder.table}.`);
+    return confirmedOrder;
   };
 
   // Order Status Flow Advance
-  const handleAdvanceOrder = (orderId: string) => {
-    const updated = orders.map((o) => {
-      if (o.id !== orderId) return o;
-      let nextStatus: OrderStage = o.status;
-      if (o.status === 'New') nextStatus = 'Preparing';
-      else if (o.status === 'Preparing') nextStatus = 'Ready';
-      else if (o.status === 'Ready') nextStatus = 'Served';
+  const handleAdvanceOrder = async (orderId: string) => {
+    const order = orders.find((item) => item.id === orderId);
+    if (!order) return;
+    const nextStatus: OrderStage = order.status === 'New'
+      ? 'Preparing'
+      : order.status === 'Preparing'
+        ? 'Ready'
+        : order.status === 'Ready'
+          ? 'Served'
+          : order.status;
 
-      return {
-        ...o,
-        status: nextStatus,
-        payment: nextStatus === 'Served' ? ('Charged to Folio' as const) : o.payment
-      };
-    });
-
-    updateOrdersState(updated);
-    showToast(`🚨 Order ${orderId} updated to "${orders.find(o => o.id === orderId)?.status}"`);
+    try {
+      await setOrderStatus(orderId, nextStatus);
+      setOrders((current) => current.map((item) => item.id === orderId
+        ? { ...item, status: nextStatus, payment: nextStatus === 'Served' ? 'Charged to Folio' : item.payment }
+        : item));
+      showToast(`Order ${orderId} updated to "${nextStatus}".`);
+    } catch (error) {
+      console.error('Order status update failed.', error);
+      showToast(error instanceof Error ? error.message : 'Unable to update the order.');
+    }
   };
 
-  const handleUpdateOrderStatus = (orderId: string, stage: OrderStage) => {
-    const updated = orders.map((o) => (o.id === orderId ? { ...o, status: stage } : o));
-    updateOrdersState(updated);
-    showToast(`🚨 Order ${orderId} status set to "${stage}"`);
+  const handleUpdateOrderStatus = async (orderId: string, stage: OrderStage) => {
+    try {
+      await setOrderStatus(orderId, stage);
+      setOrders((current) => current.map((item) => item.id === orderId
+        ? { ...item, status: stage, payment: stage === 'Served' ? 'Charged to Folio' : item.payment }
+        : item));
+      showToast(`Order ${orderId} status set to "${stage}".`);
+    } catch (error) {
+      console.error('Order status update failed.', error);
+      showToast(error instanceof Error ? error.message : 'Unable to update the order.');
+    }
   };
 
   // Service Request Handlers
-  const handleRequestService = (type: 'Waiter Call' | 'Water Refill' | 'Silverware / Napkins' | 'Bill / Folio Summary') => {
-    const randomId = `REQ-${Math.floor(1000 + Math.random() * 9000)}`;
-    const newReq: ServiceRequest = {
-      id: randomId,
-      type,
-      target: `Table ${currentTable}`,
-      status: 'Pending',
-      time: 'Just now',
-      timestamp: Date.now(),
-    };
-
-    const updated = [newReq, ...serviceRequests];
-    updateServiceRequestsState(updated);
-    showToast(`🚨 ${type} beacon transmitted to Floor Captain!`);
+  const handleRequestService = async (type: 'Waiter Call' | 'Water Refill' | 'Silverware / Napkins' | 'Bill / Folio Summary'): Promise<boolean> => {
+    try {
+      const serviceRequest = await createServiceRequest(type, `Table ${currentTable}`);
+      setServiceRequests((current) => [serviceRequest, ...current]);
+      showToast(`${type} request sent to the floor team.`);
+      return true;
+    } catch (error) {
+      console.error('Service request submission failed.', error);
+      showToast(error instanceof Error ? error.message : 'Unable to send the service request.');
+      return false;
+    }
   };
 
-  const handleResolveServiceRequest = (reqId: string) => {
-    const updated = serviceRequests.map((r) =>
-      r.id === reqId ? { ...r, status: 'Resolved' as const } : r
-    );
-    updateServiceRequestsState(updated);
-    showToast('Service call resolved and cleared.');
+  const handleResolveServiceRequest = async (reqId: string) => {
+    try {
+      await setServiceRequestStatus(reqId, 'Resolved');
+      setServiceRequests((current) => current.map((request) =>
+        request.id === reqId ? { ...request, status: 'Resolved' } : request
+      ));
+      showToast('Service call resolved and cleared.');
+    } catch (error) {
+      console.error('Service request update failed.', error);
+      showToast(error instanceof Error ? error.message : 'Unable to resolve the service request.');
+    }
   };
 
   // Admin New Dish Handlers
-  const handleAddMenuItem = (itemData: Omit<SmartMenuItem, 'id'>) => {
+  const handleAddMenuItem = async (itemData: Omit<SmartMenuItem, 'id'>) => {
     const newId = `item-${Date.now()}`;
     const newItem: SmartMenuItem = {
       ...itemData,
       id: newId,
     };
     const updated = [newItem, ...menu];
-    updateMenuState(updated);
+    await updateMenuState(updated);
     showToast(`"${newItem.name}" added to menu catalog live!`);
   };
 

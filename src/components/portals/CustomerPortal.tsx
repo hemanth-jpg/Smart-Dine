@@ -29,7 +29,7 @@ interface Props {
   menu: SmartMenuItem[];
   onOpenItemModal: (item: SmartMenuItem) => void;
   onQuickAdd: (item: SmartMenuItem) => void;
-  onRequestService: (type: 'Waiter Call' | 'Water Refill' | 'Silverware / Napkins' | 'Bill / Folio Summary') => void;
+  onRequestService: (type: 'Waiter Call' | 'Water Refill' | 'Silverware / Napkins' | 'Bill / Folio Summary') => Promise<boolean>;
   currentTable: string;
   currentRoom: string;
   onOpenTableModal: () => void;
@@ -86,10 +86,12 @@ export const CustomerPortal: React.FC<Props> = ({
     });
   }, [menu, selectedCuisine, selectedCategory, selectedType, searchQuery]);
 
-  const triggerServiceRequest = (type: 'Waiter Call' | 'Water Refill' | 'Silverware / Napkins' | 'Bill / Folio Summary') => {
+  const triggerServiceRequest = async (type: 'Waiter Call' | 'Water Refill' | 'Silverware / Napkins' | 'Bill / Folio Summary') => {
     sound.playAlarm(); // Play priority alarm sound when alert comes to staff / guest
-    onRequestService(type);
-    setServiceActionNotice(`🚨 Alert Sent: ${type} alarm transmitted to floor butler for Table ${currentTable} & ${currentRoom}`);
+    const sent = await onRequestService(type);
+    setServiceActionNotice(sent
+      ? `Alert sent: ${type} for Table ${currentTable} & ${currentRoom}`
+      : `Unable to send ${type}. Please try again.`);
     setTimeout(() => {
       setServiceActionNotice(null);
     }, 4500);

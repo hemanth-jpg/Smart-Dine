@@ -20,7 +20,7 @@ interface Props {
   cartItems: OrderItemDetail[];
   onUpdateQuantity: (index: number, newQty: number) => void;
   onRemoveItem: (index: number) => void;
-  onPlaceOrder: (order: SmartDineOrder) => void;
+  onPlaceOrder: (order: SmartDineOrder) => Promise<SmartDineOrder>;
   currentTable: string;
   currentRoom: string;
   guestName: string;
@@ -37,17 +37,19 @@ export const SmartCartDrawer: React.FC<Props> = ({
   currentRoom,
   guestName,
 }) => {
-  if (!isOpen) return null;
-
   const [billingOption, setBillingOption] = useState<BillingOption>('table_folio');
   const [deliveryNotes, setDeliveryNotes] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [orderError, setOrderError] = useState<string | null>(null);
 
   const subtotal = cartItems.reduce((sum, item) => sum + item.item.price * item.quantity, 0);
   const total = subtotal;
 
-  const handleFireOrder = () => {
-    if (cartItems.length === 0) return;
+  const handleFireOrder = async () => {
+    if (cartItems.length === 0 || isSubmitting) return;
     sound.playOrderChime();
+    setIsSubmitting(true);
+    setOrderError(null);
 
     const randomSuffix = Math.floor(10000 + Math.random() * 90000);
     const summary = cartItems.map((i) => `${i.item.name} ×${i.quantity}`).join(', ');
@@ -70,9 +72,18 @@ export const SmartCartDrawer: React.FC<Props> = ({
       specialNotes: deliveryNotes.trim() || undefined,
     };
 
-    onPlaceOrder(newOrder);
-    onClose();
+    try {
+      await onPlaceOrder(newOrder);
+      onClose();
+    } catch (error) {
+      console.error('Order submission failed:', error);
+      setOrderError(error instanceof Error ? error.message : 'Unable to place your order. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
@@ -251,13 +262,20 @@ export const SmartCartDrawer: React.FC<Props> = ({
               </div>
             </div>
 
+            {orderError && (
+              <div role="alert" className="rounded-xl border border-rose-500/40 bg-rose-950/40 px-3 py-2 text-xs text-rose-200">
+                {orderError}
+              </div>
+            )}
+
             {/* Fire Order Button */}
             <button
               onClick={handleFireOrder}
-              className="w-full py-3.5 px-4 rounded-xl bg-[#d4af37] hover:bg-[#e0be4d] active:scale-95 text-stone-950 font-bold text-sm transition-all shadow-xl flex items-center justify-center gap-2"
+              disabled={isSubmitting}
+              className="w-full py-3.5 px-4 rounded-xl bg-[#d4af37] hover:bg-[#e0be4d] disabled:opacity-60 disabled:cursor-wait active:scale-95 text-stone-950 font-bold text-sm transition-all shadow-xl flex items-center justify-center gap-2"
             >
               <Sparkles className="w-4 h-4 text-stone-950" />
-              <span>Fire Order to Kitchen Line</span>
+              <span>{isSubmitting ? 'Sending order…' : 'Fire Order to Kitchen Line'}</span>
             </button>
           </div>
         )}

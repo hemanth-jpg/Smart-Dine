@@ -1,44 +1,69 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Smart Dine Pro
 
-# Run and deploy your AI Studio app
+A full-stack restaurant ordering and hotel dining application with guest ordering, service calls, kitchen and waiter terminals, management tools, and persistent MongoDB storage.
 
-## Project layout
+## Features
 
-- `src/` contains the React frontend, UI components, app data, and browser-to-API client.
-- `server/` contains the Express API and MongoDB driver integration.
-- `database/` documents the MongoDB database and its collections.
-- Root files (`package.json`, `vite.config.ts`, `tsconfig.json`, and `.env*`) configure the full application.
+- Browse and filter Indian, Chinese, and fitness menu items; customize dishes and keep a local cart.
+- Submit orders and table service requests to the API. The server checks menu prices and creates unique order IDs.
+- Kitchen, waiter, and management terminals authenticate with individual staff passwords.
+- Staff sessions use random bearer tokens stored as SHA-256 hashes in MongoDB, expire after eight hours, and are revoked at logout. Login and guest submission endpoints are rate limited.
+- Staff-only operational data and mutations require a valid session. Menu browsing and guest order/request creation remain public.
+- Staff screens refresh shared menu, order, and service-request data every eight seconds.
 
-Run the full stack with `npm run dev:full`, or start only the frontend with `npm run dev:frontend` and the API with `npm run dev:backend`.
+## Requirements
 
-This contains everything you need to run your app locally.
+- Node.js 20 or newer
+- MongoDB Community Server or a MongoDB Atlas database
 
-View your app in AI Studio: https://ai.studio/apps/34c33410-dafa-4b51-84fb-f21811150f1e
+MongoDB Compass is optional; it is a database viewer, not the MongoDB server.
 
-## Run Locally
-
-**Prerequisites:**  Node.js
-
+## Run locally
 
 1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
 
-## MongoDB setup
+   ```sh
+   npm install
+   ```
 
-1. Install Node.js 20 or newer and MongoDB Community Server. Compass is only the GUI; it is not the database server. Get the server at https://www.mongodb.com/try/download/community and Compass at https://www.mongodb.com/try/download/compass.
-2. Start the MongoDB Server Windows service. In Compass, connect to `mongodb://127.0.0.1:27017` to view the local server.
-3. Copy `.env.example` to `.env.local` in the project root. The example uses `MONGODB_URI=mongodb://127.0.0.1:27017`; keep it for a local server. For Atlas, replace it with the URI from Atlas **Connect > Drivers**, create a database user, and allow your IP under **Network Access**. URL-encode special characters in the database user's password.
-4. Install dependencies with `npm install`, then run `npm run dev:full`.
-5. Open `http://localhost:3000`. Confirm the API's MongoDB ping at `http://localhost:3001/api/health`; success returns `"ok":true` and `"connected":true`.
-6. In Compass, refresh the connection and open the `smart_dine` database. The API creates `menu_items`, `orders`, `service_requests`, and `staff_accounts` automatically.
+2. Copy `.env.example` to `.env.local` and set `MONGODB_URI`. For a local MongoDB server, the example URI `mongodb://127.0.0.1:27017` is ready to use. For Atlas, use the URI from **Connect > Drivers**, create a database user, allow the server's IP address, and URL-encode special characters in the password.
 
-The API creates and indexes the app collections automatically. Menu/order/request records store an `id`, the app record in `data`, and an `updatedAt` timestamp. On first connection, existing browser menu, order, and service-request data is copied into empty collections. Cart contents remain browser-local.
+3. Start MongoDB, then start the API and frontend:
 
-Staff sign-in is verified against `staff_accounts`. Run `npm run staff:password` once per staff ID and enter a unique password in the hidden terminal prompt. MongoDB stores only salted scrypt hashes, never readable passwords. Staff credentials are not restored from browser storage. The API data routes still need server-side authorization before public deployment.
+   ```sh
+   npm run dev:full
+   ```
 
-Keep `MONGODB_URI` server-side only; do not prefix it with `VITE_`, because Vite exposes `VITE_*` values to the browser. The server loads `.env.local` (or `.env`) before connecting.
+4. Open `http://localhost:3000`. Check the database connection at `http://localhost:3001/api/health`; a successful response includes `"ok":true` and `"connected":true`.
+
+The API creates the `menu_items`, `orders`, `service_requests`, `staff_accounts`, and `staff_sessions` collections and their indexes. The app seeds its built-in menu when needed. Cart contents remain browser-local.
+
+## Staff accounts
+
+On first startup, the API creates the configured staff accounts without passwords. Set a unique password for each staff ID with:
+
+```sh
+npm run staff:password
+```
+
+Enter the staff ID and password in the hidden terminal prompt. The app stores salted scrypt password hashes, not plaintext passwords. Staff sessions are server-side and are not restored from browser storage. Demo staff IDs shown on the sign-in screen are identifiers only; a configured password is still required.
+
+## API access model
+
+- `GET /api/health` and `GET /api/menu` are public.
+- `POST /api/orders` and `POST /api/service-requests` are public, rate limited, validated, and persist data server-side.
+- `POST /api/auth/login` issues a time-limited staff token; `POST /api/auth/logout` revokes it.
+- `GET /api/data` requires a staff token. Menu/catalog and whole-collection writes require an admin or management role.
+- `PATCH /api/orders/:id/status` requires an authenticated kitchen, waiter, admin, or management role.
+- `PATCH /api/service-requests/:id/status` requires an authenticated waiter, admin, or management role.
+
+Keep `MONGODB_URI` server-side; do not prefix it with `VITE_`. The server loads `.env.local` (or `.env`) before connecting. Use HTTPS and restrict MongoDB network access when deploying publicly.
+
+## Useful commands
+
+```sh
+npm run dev:frontend
+npm run dev:backend
+npm run lint
+npm run build
+```

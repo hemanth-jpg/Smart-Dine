@@ -21,7 +21,7 @@ import { motion, AnimatePresence } from 'motion/react';
 interface Props {
   menu: SmartMenuItem[];
   orders: SmartDineOrder[];
-  onAddMenuItem: (item: Omit<SmartMenuItem, 'id'>) => void;
+  onAddMenuItem: (item: Omit<SmartMenuItem, 'id'>) => Promise<void>;
   authenticatedStaff?: StaffAccount | null;
   onLogoutTerminal?: () => void;
 }
@@ -44,6 +44,8 @@ export const AdminPortal: React.FC<Props> = ({
   const [draftImage, setDraftImage] = useState('https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80');
   const [draftDescription, setDraftDescription] = useState('');
   const [publishSuccessNotice, setPublishSuccessNotice] = useState<string | null>(null);
+  const [publishErrorNotice, setPublishErrorNotice] = useState<string | null>(null);
+  const [isPublishing, setIsPublishing] = useState(false);
 
   const totalRevenue = orders.reduce((sum, o) => sum + o.amount, 0);
 
@@ -57,32 +59,43 @@ export const AdminPortal: React.FC<Props> = ({
     { day: 'Sun', height: 78, val: '₹34,600' },
   ];
 
-  const handlePublishMenu = (e: React.FormEvent) => {
+  const handlePublishMenu = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!draftName.trim() || !draftPrice || !draftDescription.trim()) return;
+    const price = Number(draftPrice);
+    if (!Number.isFinite(price) || price < 0) {
+      setPublishErrorNotice('Enter a valid non-negative menu price.');
+      return;
+    }
 
-    sound.playSuccess();
-    onAddMenuItem({
-      name: draftName.trim(),
-      category: draftCategory,
-      price: Number(draftPrice),
-      time: draftTime,
-      image: draftImage.trim() || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
-      type: draftType,
-      rating: '4.9',
-      tone: draftType === 'Veg' ? 'moss' : 'clay',
-      description: draftDescription.trim(),
-      calories: 450,
-      chefRecommended: true,
-      dietaryTags: [draftType]
-    });
-
-    setPublishSuccessNotice(`"${draftName.trim()}" published live to guest menus!`);
-    setDraftName('');
-    setDraftDescription('');
-    setTimeout(() => {
-      setPublishSuccessNotice(null);
-    }, 4500);
+    setIsPublishing(true);
+    setPublishErrorNotice(null);
+    try {
+      await onAddMenuItem({
+        name: draftName.trim(),
+        category: draftCategory,
+        price,
+        time: draftTime,
+        image: draftImage.trim() || 'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&q=80',
+        type: draftType,
+        rating: '4.9',
+        tone: draftType === 'Veg' ? 'moss' : 'clay',
+        description: draftDescription.trim(),
+        calories: 450,
+        chefRecommended: true,
+        dietaryTags: [draftType]
+      });
+      sound.playSuccess();
+      setPublishSuccessNotice(`"${draftName.trim()}" published live to guest menus!`);
+      setDraftName('');
+      setDraftDescription('');
+      setTimeout(() => setPublishSuccessNotice(null), 4500);
+    } catch (error) {
+      console.error('Menu item publishing failed:', error);
+      setPublishErrorNotice(error instanceof Error ? error.message : 'Unable to publish this menu item.');
+    } finally {
+      setIsPublishing(false);
+    }
   };
 
   return (
@@ -366,22 +379,27 @@ export const AdminPortal: React.FC<Props> = ({
 
               <button
                 type="submit"
-                className="w-full py-3 rounded-xl bg-[#d4af37] hover:bg-[#e0be4d] active:scale-95 text-stone-950 font-bold text-xs transition-all shadow flex items-center justify-center gap-1.5 cursor-pointer"
+                disabled={isPublishing}
+                className="w-full py-3 rounded-xl bg-[#d4af37] hover:bg-[#e0be4d] disabled:opacity-60 disabled:cursor-wait active:scale-95 text-stone-950 font-bold text-xs transition-all shadow flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <Plus className="w-4 h-4 stroke-[2.5]" />
-                <span>Publish to Live Menu</span>
+                <span>{isPublishing ? 'Publishing…' : 'Publish to Live Menu'}</span>
               </button>
 
               <AnimatePresence>
-                {publishSuccessNotice && (
+                {(publishSuccessNotice || publishErrorNotice) && (
                   <motion.div
                     initial={{ opacity: 0, y: -5 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -5 }}
-                    className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/40 text-emerald-300 text-xs flex items-center gap-2 font-medium"
+                    className={`p-3 rounded-xl border text-xs flex items-center gap-2 font-medium ${
+                      publishErrorNotice
+                        ? 'bg-rose-950/40 border-rose-500/40 text-rose-300'
+                        : 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
+                    }`}
                   >
-                    <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <span>{publishSuccessNotice}</span>
+                    <CheckCircle2 className={`w-4 h-4 shrink-0 ${publishErrorNotice ? 'text-rose-400' : 'text-emerald-400'}`} />
+                    <span>{publishErrorNotice || publishSuccessNotice}</span>
                   </motion.div>
                 )}
               </AnimatePresence>

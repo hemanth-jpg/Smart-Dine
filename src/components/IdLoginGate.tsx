@@ -22,7 +22,7 @@ import { motion, AnimatePresence } from 'motion/react';
 
 interface Props {
   targetPortal: AppPortal;
-  onSuccessLogin: (account: StaffAccount, targetPortal: AppPortal) => void;
+  onSuccessLogin: (account: StaffAccount, targetPortal: AppPortal) => Promise<void> | void;
   onCancelToCustomer: () => void;
 }
 
@@ -82,10 +82,12 @@ export const IdLoginGate: React.FC<Props> = ({
     setErrorMsg(null);
     try {
       const account = await loginStaff(clean, passwordInput, targetPortal as 'admin' | 'kitchen' | 'waiter');
+      await onSuccessLogin(account, targetPortal);
       setIsSuccess(true);
       sound.playSuccess();
-      setTimeout(() => onSuccessLogin(account, targetPortal), 400);
-    } catch {
+      setTimeout(() => setIsSuccess(false), 400);
+    } catch (error) {
+      if (error instanceof Error) console.error('Staff portal sign-in failed:', error);
       setErrorMsg('Sign-in failed. Check your ID, password, account setup, and terminal access.');
     } finally {
       setIsSubmitting(false);
